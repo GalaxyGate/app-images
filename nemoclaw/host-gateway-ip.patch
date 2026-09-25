@@ -1,0 +1,32 @@
+diff --git a/src/lib/onboard/runtime-provider/docker.ts b/src/lib/onboard/runtime-provider/docker.ts
+index d8b675236..2c52f49a6 100644
+--- a/src/lib/onboard/runtime-provider/docker.ts
++++ b/src/lib/onboard/runtime-provider/docker.ts
+@@ -316,6 +316,9 @@ export function createDockerRuntimeProviderBundle(
+       input.environment,
+     );
+     const connectHost = getGatewayConnectHost(bindAddress);
++    // GalaxyGate patch: a gateway running in a bridged container sets this to its own IP on the
++    // sandbox network, so OpenShell's host_gateway_ip binds an address the container owns.
++    const hostGatewayIp = input.environment.NEMOCLAW_DOCKER_HOST_GATEWAY_IP?.trim() || null;
+     return {
+       providerId,
+       openShellDriver: "docker",
+@@ -325,7 +328,7 @@ export function createDockerRuntimeProviderBundle(
+       portCheckHost: bindAddress,
+       socketPath: null,
+       requiredServerIpSans: [],
+-      sandboxHostAddress: null,
++      sandboxHostAddress: hostGatewayIp,
+       usesHostGatewayRoute: false,
+       resourceOwnership: {
+         label: "openshell.ai/managed-by",
+@@ -333,7 +336,7 @@ export function createDockerRuntimeProviderBundle(
+       },
+       gatewayConfig: {
+         sandboxNamespace: "scoped",
+-        hostGatewayIp: null,
++        hostGatewayIp,
+         includeSupervisorBin: true,
+         processOwnership: "scoped-namespace",
+       },
