@@ -16,4 +16,4 @@ Container images that GalaxyGate builds for its one-click app catalog. Each fold
 
 To rebuild one folder by hand, run the build workflow from the Actions tab and enter the folder name.
 
-A new package starts out private on GHCR. An organization owner sets it to public once, under the package's settings.
+Packages built here are public and linked to this repo, because they inherit the repo's visibility. Anyone can pull them without logging in.
