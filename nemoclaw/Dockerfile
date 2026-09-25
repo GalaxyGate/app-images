@@ -29,7 +29,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       "docker-ce-cli=${DOCKER_CLI_VERSION}" "docker-buildx-plugin=${DOCKER_BUILDX_VERSION}" \
-      iproute2 procps; \
+      iproute2 lsof procps; \
     rm -rf /var/lib/apt/lists/*
 
 # OpenShell release binaries, checksums from the v0.0.116 release assets.

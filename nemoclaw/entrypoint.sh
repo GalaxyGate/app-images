@@ -5,13 +5,15 @@
 # it for OpenShell's host_gateway_ip, and run non-interactive onboarding. That
 # starts the OpenShell gateway in this container and one OpenClaw sandbox as a
 # sibling container, and forwards the dashboard to port 18789 here.
-# Stop (SIGTERM): stop the gateway, remove the sandbox containers it started,
-# and remove the network.
+# Stop (SIGTERM): remove the sandbox containers, delete the sandbox from the
+# OpenShell gateway, stop the gateway, and remove the network. The OpenClaw
+# state volume stays, so the next start creates the sandbox again on it.
 set -uo pipefail
 
 DATA_DIR=/data/nemoclaw
 NETWORK=openshell-docker
 GATEWAY_STATE="$HOME/.local/state/nemoclaw/openshell-docker-gateway-${NEMOCLAW_GATEWAY_PORT}"
+CLEAN_STOP="$DATA_DIR/.clean-stop"
 
 log() { printf '[galaxygate] %s\n' "$*"; }
 fail() {
@@ -44,17 +46,36 @@ remove_network() {
   fi
 }
 
+# The gateway keeps its sandbox record in its state on the mount. With the
+# record gone the next onboarding creates the sandbox; with a stale record it
+# tries to back up a container that no longer exists and stops.
+delete_sandbox_record() {
+  pgrep -f '^openshell-gateway' >/dev/null || return 0
+  timeout 3 openshell sandbox delete "$NEMOCLAW_SANDBOX_NAME" >/dev/null 2>&1
+  if timeout 3 openshell sandbox list >/run/nemoclaw/sandboxes.txt 2>&1 &&
+    ! grep -qw "$NEMOCLAW_SANDBOX_NAME" /run/nemoclaw/sandboxes.txt; then
+    log "deleted sandbox '$NEMOCLAW_SANDBOX_NAME' from the OpenShell gateway"
+  fi
+}
+
 on_stop() {
   trap - TERM INT
   log "stopping: removing the containers this app started"
-  # PID 1 is this script; -1 reaches every other process in the container,
-  # so the gateway cannot recreate a sandbox while it is being removed.
+  remove_sandboxes
+  delete_sandbox_record
+  # PID 1 is this script; -1 reaches every other process in the container.
   kill -TERM -1 2>/dev/null
   sleep 1
   kill -KILL -1 2>/dev/null
   remove_sandboxes
   remove_network
+  touch "$CLEAN_STOP"
   exit 0
+}
+
+onboard() {
+  nemoclaw onboard --non-interactive &
+  wait $!
 }
 
 SELF="$(self_id)"
@@ -74,8 +95,15 @@ fi
 
 trap on_stop TERM INT
 
-# Sandboxes left by a previous run that was killed without a clean stop.
+# A run killed without a clean stop leaves its sandbox container and the
+# gateway's record of it. Onboarding rebuilds the gateway database, and with a
+# stale record it would try to back up the missing container and stop.
 remove_sandboxes
+if [ -e "$GATEWAY_STATE/openshell.db" ] && [ ! -e "$CLEAN_STOP" ]; then
+  log "the previous run did not stop cleanly; resetting the OpenShell gateway database"
+  rm -f "$GATEWAY_STATE"/openshell.db*
+fi
+rm -f "$CLEAN_STOP"
 
 mkdir -p "$DATA_DIR/bin" "$HOME" /run/nemoclaw
 install -m 0755 /usr/local/bin/openshell-sandbox "$NEMOCLAW_OPENSHELL_SANDBOX_BIN"
@@ -90,15 +118,14 @@ printf '%s\n' "$ip" >/run/nemoclaw/host-gateway-ip
 log "controller address on $NETWORK: $ip"
 
 log "running nemoclaw onboard --non-interactive for sandbox '$NEMOCLAW_SANDBOX_NAME'"
-nemoclaw onboard --non-interactive &
-wait $!
+onboard
 rc=$?
 if [ "$rc" -eq 0 ]; then
   log "onboarding finished; the dashboard is on container port 18789"
   nemoclaw "$NEMOCLAW_SANDBOX_NAME" dashboard-url 2>&1 | sed 's/^/[galaxygate] /'
 else
   log "onboarding failed with exit code $rc; see the lines above"
-  log "fix the app's environment and restart the app, or run: docker exec -it <app> nemoclaw onboard --resume"
+  log "fix the app's environment and restart the app to onboard again"
 fi
 
 sleep infinity &
