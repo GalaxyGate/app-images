@@ -1,0 +1,92 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "*/**"
+      - "!.github/**"
+  workflow_dispatch:
+    inputs:
+      folder:
+        description: Image folder to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  folders:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.pick.outputs.list }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          FOLDER: ${{ inputs.folder }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ]; then
+            candidates="$FOLDER"
+          elif git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            candidates=$(git diff --name-only "$BEFORE" "$AFTER" | cut -s -d/ -f1 | sort -u)
+          else
+            candidates=$(for d in */; do echo "${d%/}"; done)
+          fi
+          list=()
+          for d in $candidates; do
+            if [ -f "$d/Dockerfile" ] && [ -f "$d/TAG" ]; then
+              list+=("$d")
+            elif [ "$EVENT" = workflow_dispatch ]; then
+              echo "::error::$d has no Dockerfile and TAG"
+              exit 1
+            fi
+          done
+          json=$(printf '%s\n' "${list[@]}" | jq -R 'select(length > 0)' | jq -sc .)
+          echo "list=$json" >> "$GITHUB_OUTPUT"
+          echo "Building: $json"
+
+  build:
+    needs: folders
+    if: needs.folders.outputs.list != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        folder: ${{ fromJSON(needs.folders.outputs.list) }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: tag
+        env:
+          FOLDER: ${{ matrix.folder }}
+        run: |
+          tag=$(tr -d '[:space:]' < "$FOLDER/TAG")
+          if ! [[ "$tag" =~ ^[A-Za-z0-9._]+-r[0-9]+$ ]]; then
+            echo "::error::$FOLDER/TAG must look like <upstream-version>-r<rev>, got '$tag'"
+            exit 1
+          fi
+          owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          echo "ref=ghcr.io/$owner/$FOLDER:$tag" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.folder }}
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ steps.tag.outputs.ref }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

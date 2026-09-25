@@ -1,0 +1,13 @@
+[server]
+address = "0.0.0.0:8000"
+workers = 2
+max_content_length = "10MB"
+upload_path = "/app/upload"
+
+[paste]
+random_url = { type = "alphanumeric", length = 6 }
+default_expiry = "1w"
+default_extension = "txt"
+
+[config]
+refresh_rate = "30s"
