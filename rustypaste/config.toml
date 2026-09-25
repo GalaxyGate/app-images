@@ -3,11 +3,16 @@ address = "0.0.0.0:8000"
 workers = 2
 max_content_length = "10MB"
 upload_path = "/app/upload"
+timeout = "30s"
+hardening = true
+expose_version = false
+expose_list = false
 
 [paste]
 random_url = { type = "alphanumeric", length = 6 }
-default_expiry = "1w"
 default_extension = "txt"
+default_expiry = "1w"
+delete_expired_files = { enabled = true, interval = "1h" }
 
 [config]
 refresh_rate = "30s"
