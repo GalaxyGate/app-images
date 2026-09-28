@@ -1,0 +1,21 @@
+#!/command/with-contenv sh
+set -eu
+
+if [ -z "${HERMES_WEBUI_PASSWORD:-}" ]; then
+    echo "[hermes-webui] HERMES_WEBUI_PASSWORD is required for the public WebUI port." >&2
+    exit 1
+fi
+
+export HOME="${HERMES_HOME:-/opt/data}"
+export HERMES_HOME="${HERMES_HOME:-/opt/data}"
+export HERMES_WEBUI_HOST="${HERMES_WEBUI_HOST:-0.0.0.0}"
+export HERMES_WEBUI_PORT="${HERMES_WEBUI_PORT:-22042}"
+export HERMES_WEBUI_STATE_DIR="${HERMES_WEBUI_STATE_DIR:-${HERMES_HOME}/webui}"
+export HERMES_WEBUI_AGENT_DIR="${HERMES_WEBUI_AGENT_DIR:-/opt/hermes}"
+export HERMES_WEBUI_PYTHON="${HERMES_WEBUI_PYTHON:-/opt/hermes/.venv/bin/python}"
+export HERMES_API_URL="${HERMES_API_URL:-http://127.0.0.1:${API_SERVER_PORT:-22041}}"
+export HERMES_WEBUI_GATEWAY_API_KEY="${HERMES_WEBUI_GATEWAY_API_KEY:-${API_SERVER_KEY:-}}"
+export HERMES_WEBUI_TRUST_FORWARDED_PROTO="${HERMES_WEBUI_TRUST_FORWARDED_PROTO:-1}"
+
+cd /opt/hermes-webui
+exec s6-setuidgid hermes /opt/hermes/.venv/bin/python /opt/hermes-webui/server.py

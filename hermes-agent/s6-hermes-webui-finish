@@ -1,0 +1,7 @@
+#!/command/with-contenv sh
+
+if [ -z "${HERMES_WEBUI_PASSWORD:-}" ]; then
+    exit 125
+fi
+
+exit 0
