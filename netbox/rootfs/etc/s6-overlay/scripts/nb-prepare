@@ -1,0 +1,52 @@
+#!/command/with-contenv bash
+# Lays out /data, refuses a data folder that another NetBox container holds,
+# creates the PostgreSQL cluster on first boot and the internal Valkey password.
+set -euo pipefail
+
+PGBIN=/usr/lib/postgresql/18/bin
+
+mkdir -p /data
+exec 9>>/data/.lock
+if ! flock -n 9; then
+    echo "[netbox] ERROR: another NetBox container is using this data folder. Give each NetBox app its own host folder." >&2
+    exit 1
+fi
+exec 9>&-
+
+own() {
+    local dir=$1 user=$2 group=$3 mode=$4
+    install -d -o "$user" -g "$group" -m "$mode" "$dir"
+    if [ -n "$(find "$dir" ! -user "$user" -print -quit)" ]; then
+        chown -R "$user:$group" "$dir"
+    fi
+}
+
+own /data/postgres postgres postgres 0700
+own /data/valkey valkey valkey 0700
+own /data/media netbox root 0775
+own /data/scripts netbox root 0775
+own /data/reports netbox root 0775
+install -d -m 0700 /data/.secrets
+install -d -o postgres -g postgres -m 2775 /run/postgresql
+
+for d in scripts reports; do
+    [ -e "/data/$d/__init__.py" ] || install -o netbox -g root -m 0664 /dev/null "/data/$d/__init__.py"
+done
+
+if [ ! -s /data/postgres/PG_VERSION ]; then
+    echo "[netbox] First boot: creating the PostgreSQL 18 cluster in /data/postgres"
+    s6-setuidgid postgres "$PGBIN/initdb" -D /data/postgres -U postgres -E UTF8 \
+        --locale=C.UTF-8 --auth-local=peer --auth-host=reject
+elif [ "$(cat /data/postgres/PG_VERSION)" != 18 ]; then
+    echo "[netbox] ERROR: /data/postgres holds a PostgreSQL $(cat /data/postgres/PG_VERSION) cluster and this image runs PostgreSQL 18." >&2
+    exit 1
+fi
+
+if [ ! -s /data/.secrets/redis_password ]; then
+    openssl rand -hex 24 > /data/.secrets/redis_password
+fi
+chmod 0600 /data/.secrets/redis_password
+install -d -m 0755 /run/secrets
+for f in redis_password redis_cache_password; do
+    install -o root -g root -m 0440 /data/.secrets/redis_password "/run/secrets/$f"
+done

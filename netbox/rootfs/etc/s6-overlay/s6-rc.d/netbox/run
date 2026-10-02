@@ -1,0 +1,5 @@
+#!/command/with-contenv bash
+cd /opt/netbox/netbox
+export HOME=/opt/netbox
+umask 002
+exec s6-setuidgid netbox /opt/netbox/launch-netbox.sh

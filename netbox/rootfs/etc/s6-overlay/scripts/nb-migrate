@@ -1,0 +1,46 @@
+#!/command/with-contenv bash
+# Waits for PostgreSQL and Valkey, creates the netbox role and database once,
+# then runs the upstream entrypoint: migrations and the first superuser.
+set -euo pipefail
+
+PGBIN=/usr/lib/postgresql/18/bin
+
+for i in $(seq 1 120); do
+    if s6-setuidgid postgres "$PGBIN/pg_isready" -q -h /run/postgresql; then
+        break
+    fi
+    if [ "$i" = 120 ]; then
+        echo "[netbox] ERROR: PostgreSQL did not accept connections within 120 seconds." >&2
+        exit 1
+    fi
+    sleep 1
+done
+
+psql_pg() {
+    s6-setuidgid postgres "$PGBIN/psql" -h /run/postgresql -U postgres -d postgres \
+        -v ON_ERROR_STOP=1 -tAq -c "$1"
+}
+if [ "$(psql_pg "SELECT 1 FROM pg_roles WHERE rolname = 'netbox'")" != 1 ]; then
+    psql_pg "CREATE ROLE netbox LOGIN"
+fi
+if [ "$(psql_pg "SELECT 1 FROM pg_database WHERE datname = 'netbox'")" != 1 ]; then
+    psql_pg "CREATE DATABASE netbox OWNER netbox"
+fi
+
+REDISCLI_AUTH=$(cat /run/secrets/redis_password)
+export REDISCLI_AUTH
+for i in $(seq 1 60); do
+    if [ "$(valkey-cli -h 127.0.0.1 -p 6379 ping 2>/dev/null)" = PONG ]; then
+        break
+    fi
+    if [ "$i" = 60 ]; then
+        echo "[netbox] ERROR: Valkey did not answer within 60 seconds." >&2
+        exit 1
+    fi
+    sleep 1
+done
+unset REDISCLI_AUTH
+
+cd /opt/netbox/netbox
+export HOME=/opt/netbox
+exec s6-setuidgid netbox /opt/netbox/docker-entrypoint.sh true

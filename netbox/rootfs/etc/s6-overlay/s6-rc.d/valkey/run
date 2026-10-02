@@ -1,0 +1,15 @@
+#!/command/with-contenv bash
+set -euo pipefail
+install -d -o valkey -g valkey -m 0700 /run/valkey
+umask 077
+cat > /run/valkey/valkey.conf <<EOF
+bind 127.0.0.1
+port 6379
+protected-mode yes
+daemonize no
+dir /data/valkey
+appendonly yes
+requirepass $(cat /data/.secrets/redis_password)
+EOF
+chown valkey:valkey /run/valkey/valkey.conf
+exec s6-setuidgid valkey valkey-server /run/valkey/valkey.conf

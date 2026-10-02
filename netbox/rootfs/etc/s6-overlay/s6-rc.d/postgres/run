@@ -1,0 +1,14 @@
+#!/command/with-contenv bash
+# The postmaster inherits fd 9 and holds the /data lock for as long as it runs.
+exec 9>>/data/.lock
+if ! flock -n 9; then
+    echo "[postgres] ERROR: another NetBox container is using this data folder." >&2
+    sleep 2
+    exit 1
+fi
+exec s6-setuidgid postgres /usr/lib/postgresql/18/bin/postgres -D /data/postgres \
+    -c listen_addresses= \
+    -c unix_socket_directories=/run/postgresql \
+    -c hba_file=/etc/galaxygate/pg_hba.conf \
+    -c ident_file=/etc/galaxygate/pg_ident.conf \
+    -c dynamic_shared_memory_type=mmap
