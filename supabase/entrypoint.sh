@@ -2,10 +2,13 @@
 # Runs upstream's self-hosted Supabase compose stack on the server whose Docker
 # socket is mounted, and removes it again when this container stops.
 #
-# First start: copy upstream's docker/ folder to /data/supabase/stack and run
-# upstream's utils/generate-keys.sh and utils/add-new-auth-keys.sh, the steps
-# upstream setup.sh runs. The generated JWT secret, API keys and encryption keys
-# stay in stack/.env on the mount, so they survive restarts and redeploys.
+# First start: copy upstream's docker/ folder to /data/supabase/stack.new, run
+# upstream's utils/generate-keys.sh and utils/add-new-auth-keys.sh there (the
+# steps upstream setup.sh runs), then rename it to /data/supabase/stack. An
+# interrupted first start leaves no stack/.env, so the next start redoes it
+# instead of running with .env.example's published demo keys. The generated JWT
+# secret, API keys and encryption keys stay in stack/.env on the mount, so they
+# survive restarts and redeploys.
 # Every start: the app's environment overrides stack/.env (compose gives shell
 # variables precedence over .env), a changed POSTGRES_PASSWORD is applied to the
 # database roles the way utils/db-passwd.sh does, and docker compose brings the
@@ -78,16 +81,23 @@ on_stop() {
 }
 
 first_start() {
+  local new="$DATA_DIR/stack.new"
+  [ -e "$STACK/volumes/db/data/PG_VERSION" ] &&
+    fail "$STACK/.env is missing but $STACK holds a database; restore stack/.env from a backup"
   log "first start: copying upstream's docker folder ($(cat "$UPSTREAM/.galaxygate-upstream")) to $STACK"
-  mkdir -p "$STACK"
-  cp -a "$UPSTREAM/." "$STACK/" || fail "cannot copy the stack files to $STACK"
-  cd "$STACK" || fail "cannot enter $STACK"
+  rm -rf "$new"
+  mkdir -p "$new"
+  cp -a "$UPSTREAM/." "$new/" || fail "cannot copy the stack files to $new"
+  cd "$new" || fail "cannot enter $new"
   cp .env.example .env
   log "generating the JWT secret, API keys and encryption keys with upstream utils/generate-keys.sh and utils/add-new-auth-keys.sh"
   sh utils/generate-keys.sh --update-env >/dev/null || fail "utils/generate-keys.sh failed"
   sh utils/add-new-auth-keys.sh --update-env >/dev/null || fail "utils/add-new-auth-keys.sh failed"
   rm -f .env.old docker-compose.yml.old
   chmod 600 .env
+  cd "$DATA_DIR" || fail "cannot enter $DATA_DIR"
+  rm -rf "$STACK"
+  mv "$new" "$STACK" || fail "cannot move $new to $STACK"
 }
 
 check_inputs() {

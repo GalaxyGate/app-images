@@ -22,11 +22,20 @@ RUN set -eux; \
     git sparse-checkout set docker; \
     printf '%s %s\n' "${SUPABASE_TAG}" "${SUPABASE_COMMIT}" > /src/docker/.galaxygate-upstream
 
+# Node.js runs upstream's key scripts. Debian's nodejs 18 can deadlock in
+# add-new-auth-keys.sh: a garbage collection during the JWK export of the
+# generated EC key destroys the key generation job, whose destructor locks the
+# key mutex the export already holds. Node 24 removed that lock (nodejs/node
+# c21d576579), so the official Node 24 LTS binary is used instead.
+FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS node
+
 FROM debian:bookworm-20260918-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
 
 ARG DOCKER_CLI_VERSION=5:29.8.1-1~debian.12~bookworm
 ARG DOCKER_COMPOSE_VERSION=5.5.1-1~debian.12~bookworm
 ARG DOCKER_APT_KEY_FPR=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
 
 # openssl and node run upstream's utils/generate-keys.sh and
 # utils/add-new-auth-keys.sh; socat relays the container ports into the stack.
@@ -41,7 +50,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       "docker-ce-cli=${DOCKER_CLI_VERSION}" "docker-compose-plugin=${DOCKER_COMPOSE_VERSION}" \
-      openssl nodejs socat procps; \
+      openssl socat procps; \
     apt-get purge -y gpg; \
     apt-get autoremove -y; \
     rm -rf /var/lib/apt/lists/*; \
