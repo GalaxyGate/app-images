@@ -1,0 +1,50 @@
+#!/command/with-contenv bash
+set -euo pipefail
+trap 'echo "[postgres] run script failed at line $LINENO" >&2' ERR
+
+PGDATA=/var/lib/postgresql/data
+PGBIN=/usr/lib/postgresql/17/bin
+PWFILE="$PGDATA/.immich-db-password"
+
+install -d -o postgres -g postgres -m 2775 /run/postgresql
+mkdir -p "$PGDATA"
+
+# Two apps from one template get the same host folders. Hold a lock on the
+# data folder for the life of this postmaster so a second container never
+# opens the same cluster. The lock fd stays open across exec.
+exec 9<"$PGDATA"
+if ! flock -n 9; then
+    echo "[postgres] $PGDATA is already in use by another container. Give each Immich app its own data folders. Stopping." >&2
+    echo 1 > /run/s6-linux-init-container-results/exitcode
+    /run/s6/basedir/bin/halt
+    exit 1
+fi
+
+if [ "$(stat -c %u "$PGDATA")" != "999" ]; then
+    chown -R postgres:postgres "$PGDATA"
+fi
+chmod 700 "$PGDATA"
+
+if [ ! -s "$PGDATA/PG_VERSION" ]; then
+    echo "[postgres] initialising a new cluster in $PGDATA"
+    pw="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
+    tmp="$(mktemp)"
+    printf '%s\n' "$pw" > "$tmp"
+    chown postgres:postgres "$tmp"
+    s6-setuidgid postgres "$PGBIN/initdb" -D "$PGDATA" -U postgres --pwfile="$tmp" \
+        --auth-host=scram-sha-256 --auth-local=peer --data-checksums \
+        --encoding=UTF8 --locale=C.UTF-8
+    rm -f "$tmp"
+    echo "CREATE DATABASE immich;" | s6-setuidgid postgres "$PGBIN/postgres" --single -D "$PGDATA" postgres
+    printf '%s' "$pw" > "$PWFILE.tmp"
+    chown postgres:postgres "$PWFILE.tmp"
+    chmod 600 "$PWFILE.tmp"
+    mv "$PWFILE.tmp" "$PWFILE"
+fi
+
+if [ ! -s "$PWFILE" ]; then
+    echo "[postgres] $PWFILE is missing, so the Immich server cannot sign in to this database." >&2
+    exit 1
+fi
+
+exec s6-setuidgid postgres "$PGBIN/postgres" -D "$PGDATA" -c config_file=/etc/postgresql/immich.conf

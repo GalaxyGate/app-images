@@ -1,0 +1,5 @@
+#!/command/with-contenv sh
+set -eu
+install -d -o valkey -g valkey -m 0750 /var/lib/valkey
+exec s6-setuidgid valkey valkey-server --bind 127.0.0.1 --port 6379 --protected-mode yes \
+    --dir /var/lib/valkey --daemonize no --logfile ""

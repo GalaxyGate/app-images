@@ -1,0 +1,29 @@
+#!/command/with-contenv bash
+set -eu
+
+if [ "${IMMICH_MACHINE_LEARNING_ENABLED:-true}" = "false" ]; then
+    echo "[immich-ml] IMMICH_MACHINE_LEARNING_ENABLED=false, so machine learning is not started."
+    exit 0
+fi
+
+# The ML server reads the same IMMICH_HOST and IMMICH_PORT names as the Immich
+# server, so they are set here only. It spawns "python" by name, so the venv
+# must be first on PATH.
+export IMMICH_HOST=127.0.0.1
+export IMMICH_PORT=3003
+export PATH="/opt/venv/bin:$PATH"
+export VIRTUAL_ENV=/opt/venv
+export PYTHONPATH=/usr/src/ml
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONUNBUFFERED=1
+export MACHINE_LEARNING_MODEL_ARENA="${MACHINE_LEARNING_MODEL_ARENA:-false}"
+lib="/usr/lib/$(arch)-linux-gnu/libmimalloc.so.3"
+if [ -f "$lib" ]; then
+    export LD_PRELOAD="$lib"
+fi
+
+mkdir -p "${MACHINE_LEARNING_CACHE_FOLDER:-/cache}"
+cd /usr/src/ml
+# tini -g passes the stop signal to the whole process group, so the gunicorn
+# child stops with its parent.
+exec tini -s -g -- python -m immich_ml

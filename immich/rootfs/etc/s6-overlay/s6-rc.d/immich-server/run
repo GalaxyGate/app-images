@@ -1,0 +1,23 @@
+#!/command/with-contenv bash
+set -eu
+
+PWFILE=/var/lib/postgresql/data/.immich-db-password
+
+for i in $(seq 1 120); do
+    if [ -s "$PWFILE" ] && pg_isready -q -h 127.0.0.1 -p 5432 \
+        && [ "$(valkey-cli -h 127.0.0.1 -p 6379 ping 2>/dev/null)" = "PONG" ]; then
+        break
+    fi
+    if [ "$i" = 120 ]; then
+        echo "[immich-server] Postgres or Valkey did not come up within 120 seconds." >&2
+        exit 1
+    fi
+    sleep 1
+done
+
+DB_PASSWORD="$(cat "$PWFILE")"
+export DB_PASSWORD
+cd /usr/src/app
+# start.sh runs node, which forks the api worker. tini -g passes the stop
+# signal to the whole process group so the api worker stops too.
+exec tini -s -g -- start.sh

@@ -1,0 +1,5 @@
+#!/command/with-contenv sh
+if [ "${IMMICH_MACHINE_LEARNING_ENABLED:-true}" = "false" ]; then
+    exit 125
+fi
+exit 0
