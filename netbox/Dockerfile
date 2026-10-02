@@ -31,10 +31,13 @@ RUN chmod 0755 /etc/s6-overlay/scripts/* /etc/s6-overlay/s6-rc.d/*/run \
 # One container runs PostgreSQL, Valkey, the Granian web server and the RQ
 # worker under s6. NetBox reaches PostgreSQL over its Unix socket with peer
 # auth and Valkey on 127.0.0.1. Everything persistent lives under /data.
+# DB_WAIT_DEBUG prints the whole startup error, such as a short SECRET_KEY,
+# instead of only its last line.
 ENV PATH=/command:/opt/netbox/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
     S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0 \
     S6_VERBOSITY=1 \
+    DB_WAIT_DEBUG=1 \
     DB_HOST=/run/postgresql \
     DB_NAME=netbox \
     DB_USER=netbox \
