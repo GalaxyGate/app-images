@@ -25,8 +25,11 @@ RUN curl -fsSL -o /tmp/s6-overlay-noarch.tar.xz \
 
 COPY rootfs/ /
 
+# rootfs also replaces netbox-docker's granian.py with a copy that marks
+# /media/ responses Cache-Control: private.
 RUN chmod 0755 /etc/s6-overlay/scripts/* /etc/s6-overlay/s6-rc.d/*/run \
-    && chmod 0644 /etc/galaxygate/* /etc/netbox/config/zz-galaxygate.py
+    && chmod 0644 /etc/galaxygate/* /etc/netbox/config/zz-galaxygate.py \
+        /opt/netbox/netbox/netbox/granian.py
 
 # One container runs PostgreSQL, Valkey, the Granian web server and the RQ
 # worker under s6. NetBox reaches PostgreSQL over its Unix socket with peer
