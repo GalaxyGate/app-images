@@ -1,0 +1,68 @@
+name: test
+
+on:
+  pull_request:
+    paths:
+      - "*/**"
+
+permissions:
+  contents: read
+
+jobs:
+  folders:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.pick.outputs.list }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: pick
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          list=()
+          for d in $(git diff --name-only "$BASE...$HEAD" | cut -s -d/ -f1 | sort -u); do
+            if [ -f "$d/Dockerfile" ] && [ -f "$d/TAG" ]; then
+              list+=("$d")
+            fi
+          done
+          json=$(printf '%s\n' "${list[@]}" | jq -R 'select(length > 0)' | jq -sc .)
+          echo "list=$json" >> "$GITHUB_OUTPUT"
+          echo "Testing: $json"
+
+  test:
+    needs: folders
+    if: needs.folders.outputs.list != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        folder: ${{ fromJSON(needs.folders.outputs.list) }}
+    steps:
+      - uses: actions/checkout@v7
+      - env:
+          FOLDER: ${{ matrix.folder }}
+        run: |
+          tag=$(tr -d '[:space:]' < "$FOLDER/TAG")
+          if ! [[ "$tag" =~ ^[A-Za-z0-9._]+-r[0-9]+$ ]]; then
+            echo "::error::$FOLDER/TAG must look like <upstream-version>-r<rev>, got '$tag'"
+            exit 1
+          fi
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.folder }}
+          platforms: linux/amd64
+          load: true
+          provenance: false
+          tags: local/${{ matrix.folder }}:test
+      - env:
+          FOLDER: ${{ matrix.folder }}
+        run: |
+          if [ -f "$FOLDER/test.sh" ]; then
+            "./$FOLDER/test.sh" "local/$FOLDER:test"
+          else
+            echo "$FOLDER has no test.sh"
+          fi
