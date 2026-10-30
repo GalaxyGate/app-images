@@ -77,8 +77,8 @@ async function signIn() {
       auth: { token },
       device: { id: deviceId, publicKey: publicKey.toString("base64url"), signature, signedAt: ts, nonce },
     });
-    const retryAfter = res.error?.details?.retryAfterMs;
-    if (!res.ok && res.error?.code === "UNAVAILABLE" && retryAfter && attempt < 30) {
+    const retryAfter = res.error?.retryAfterMs ?? res.error?.details?.retryAfterMs;
+    if (!res.ok && res.error?.retryable && retryAfter && attempt < 30) {
       s.ws.close();
       await new Promise((resolve) => setTimeout(resolve, retryAfter));
       continue;
