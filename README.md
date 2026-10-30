@@ -5,6 +5,7 @@ Container images that GalaxyGate builds for its one-click app catalog. Each fold
 | Folder | Image |
 | --- | --- |
 | `hermes-agent` | Hermes Agent with the gateway set as the default command |
+| `nextcloud` | NextCloud whose Apache keeps https links and redirects behind the app-domain proxy |
 | `openclaw` | OpenClaw with a first-start entrypoint that writes the gateway's Docker settings |
 | `rustypaste` | Rustypaste with a baked config file |
 
