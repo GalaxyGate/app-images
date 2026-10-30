@@ -11,6 +11,9 @@ FROM ghcr.io/openclaw/openclaw:2026.9.33@sha256:ced9bfaf2514f9ec6bb2172616149076
 # runs doctor before the gateway. test.sh checks that ENTRYPOINT ends with the
 # base image's own ENTRYPOINT. The paths and port are the ones upstream's
 # docker-compose.yml pins.
+# Behind a reverse proxy, such as the app-domain proxy, the gateway answers
+# forwarded requests with 403 unless gateway.trustedProxies lists the proxy,
+# so the entrypoint also writes OPENCLAW_TRUSTED_PROXIES there when it is set.
 ENV OPENCLAW_STATE_DIR=/home/node/.openclaw \
     OPENCLAW_CONFIG_PATH=/home/node/.openclaw/openclaw.json \
     OPENCLAW_WORKSPACE_DIR=/home/node/.openclaw/workspace \

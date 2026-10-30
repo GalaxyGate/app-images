@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs the image the way the panel does, with fresh volumes and only environment
-# variables, and checks the first-start config, a Control UI sign-in from another
-# host, restarts, a replaced container, and the refusals.
+# variables, and checks the first-start config, a trusted and an untrusted proxy,
+# a Control UI sign-in from another host, restarts, a replaced container, and the
+# refusals.
 #   openclaw/test.sh <image>
 set -euo pipefail
 
@@ -11,6 +12,9 @@ name=openclaw-test-$$
 origin=https://openclaw-ci.example.com
 token=$(openssl rand -hex 32)
 ids=$(mktemp -d)
+# Requests to the published port on 127.0.0.1 reach the container from the
+# bridge gateway, so the host plays the trusted proxy and other containers do not.
+proxy=$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')
 
 cleanup() {
     docker rm -f "$name" >/dev/null 2>&1 || true
@@ -30,7 +34,8 @@ start() {
         -v "$name-state:/home/node/.openclaw" \
         -v "$name-workspace:/home/node/.openclaw/workspace" \
         -v "$name-secrets:/home/node/.config/openclaw" \
-        -e OPENCLAW_GATEWAY_TOKEN="$token" -e OPENCLAW_PUBLIC_ORIGIN="$1" "$image" >/dev/null
+        -e OPENCLAW_GATEWAY_TOKEN="$token" -e OPENCLAW_PUBLIC_ORIGIN="$1" \
+        -e OPENCLAW_TRUSTED_PROXIES="$proxy" "$image" >/dev/null
     wait_ready
 }
 
@@ -76,10 +81,26 @@ got=$(docker inspect -f '{{json .Config.Cmd}}' "$image")
 echo "PASS: the entrypoint hands over to upstream's entrypoint and command"
 
 start "$origin"
-config | jq -e --arg origin "$origin" \
-    '.gateway.mode == "local" and .gateway.bind == "lan" and .gateway.publicOrigin == $origin' >/dev/null ||
+config | jq -e --arg origin "$origin" --arg proxy "$proxy" \
+    '.gateway.mode == "local" and .gateway.bind == "lan" and .gateway.publicOrigin == $origin
+     and .gateway.trustedProxies == [$proxy]' >/dev/null ||
     fail "first-start config: $(config)"
-echo "PASS: first start wrote gateway.mode, gateway.bind and gateway.publicOrigin, and the published port answers"
+echo "PASS: first start wrote gateway.mode, gateway.bind, gateway.publicOrigin and gateway.trustedProxies, and the published port answers"
+
+forwarded=(-H "X-Forwarded-For: 203.0.113.7" -H "X-Forwarded-Proto: https" -H "X-Forwarded-Host: openclaw-ci.example.com")
+code=$(curl -s -o /dev/null -w '%{http_code}' "${forwarded[@]}" "http://127.0.0.1:$port/")
+[ "$code" = 200 ] || fail "the Control UI page through the trusted proxy returned $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' "${forwarded[@]}" -X POST -H "Content-Type: application/json" \
+    -d '{"tool":"sessions_list","args":{}}' "http://127.0.0.1:$port/tools/invoke")
+[ "$code" = 401 ] || fail "the API through the trusted proxy without a token returned $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' "${forwarded[@]}" -X POST -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $token" -d '{"tool":"sessions_list","args":{}}' "http://127.0.0.1:$port/tools/invoke")
+[ "$code" = 200 ] || fail "the API through the trusted proxy with the token returned $code"
+out=$(docker run --rm --network bridge --entrypoint node "$image" --input-type=module -e '
+    const res = await fetch(process.argv[1], { headers: { "X-Forwarded-For": "203.0.113.7", "X-Forwarded-Proto": "https" } });
+    console.log(res.status, await res.text());' "http://$gateway:18789/")
+grep -q '^403 .*proxy_attribution_required' <<<"$out" || fail "an untrusted proxy was not refused: ${out:0:300}"
+echo "PASS: the trusted proxy reaches the page and the token-checked API, an untrusted proxy gets 403"
 
 out=$(connect "$token" https://elsewhere.example.com || true)
 grep -q 'origin not allowed' <<<"$out" || fail "a foreign browser origin was not refused: $out"
@@ -118,15 +139,16 @@ config | jq -e '.gateway.publicOrigin == "https://changed.example.com"' >/dev/nu
 echo "PASS: a replaced container keeps the customer's config, the pairing and the note"
 
 docker rm -f "$name" >/dev/null
-for bad in "" "http://203.0.113.10:18789"; do
+for bad in "OPENCLAW_PUBLIC_ORIGIN=" "OPENCLAW_PUBLIC_ORIGIN=http://203.0.113.10:18789" \
+    "OPENCLAW_TRUSTED_PROXIES=proxy.example.com"; do
     docker volume rm -f "$name-fresh" >/dev/null
     rc=0
-    timeout 180 docker run --rm -v "$name-fresh:/home/node/.openclaw" \
-        -e OPENCLAW_GATEWAY_TOKEN="$token" -e OPENCLAW_PUBLIC_ORIGIN="$bad" "$image" >/dev/null 2>&1 || rc=$?
+    timeout 180 docker run --rm -v "$name-fresh:/home/node/.openclaw" -e OPENCLAW_GATEWAY_TOKEN="$token" \
+        -e OPENCLAW_PUBLIC_ORIGIN="$origin" -e "$bad" "$image" >/dev/null 2>&1 || rc=$?
     if [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ]; then
-        fail "OPENCLAW_PUBLIC_ORIGIN='$bad' on a fresh volume ended with $rc"
+        fail "$bad on a fresh volume ended with $rc"
     fi
     left=$(docker run --rm -v "$name-fresh:/v" --entrypoint ls "$image" -A /v)
-    ! grep -qx 'openclaw.json' <<<"$left" || fail "OPENCLAW_PUBLIC_ORIGIN='$bad' left a config behind"
+    ! grep -qx 'openclaw.json' <<<"$left" || fail "$bad left a config behind"
 done
-echo "PASS: a missing or plain-HTTP origin stops the first start and writes no config"
+echo "PASS: a missing or plain-HTTP origin and a malformed proxy list stop the first start and write no config"
