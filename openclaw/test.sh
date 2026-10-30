@@ -26,7 +26,7 @@ fail() {
 }
 
 start() {
-    docker run -d --name "$name" -p 127.0.0.1::18789 \
+    docker run -d --name "$name" --restart unless-stopped -p 127.0.0.1::18789 \
         -v "$name-state:/home/node/.openclaw" \
         -v "$name-workspace:/home/node/.openclaw/workspace" \
         -v "$name-secrets:/home/node/.config/openclaw" \
@@ -34,19 +34,21 @@ start() {
     wait_ready
 }
 
+# Waits through restarts too: a gateway killed without a clean stop holds its
+# state lease for up to five minutes, and the restart policy retries meanwhile.
 wait_ready() {
-    for _ in $(seq 120); do
-        if [ "$(docker inspect -f '{{.State.Running}}' "$name")" != true ]; then
-            fail "container stopped"
-        fi
-        port=$(docker port "$name" 18789/tcp | head -1 | sed 's/.*://')
-        if curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
-            gateway=$(docker inspect -f '{{.NetworkSettings.IPAddress}}' "$name")
-            return 0
+    for _ in $(seq 240); do
+        if [ "$(docker inspect -f '{{.State.Running}}' "$name")" = true ]; then
+            port=$(docker port "$name" 18789/tcp | head -1 | sed 's/.*://')
+            if curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
+                gateway=$(docker inspect -f '{{.NetworkSettings.IPAddress}}' "$name")
+                echo "gateway ready after $(docker inspect -f '{{.RestartCount}}' "$name") restarts"
+                return 0
+            fi
         fi
         sleep 2
     done
-    fail "gateway did not answer on the published port within 240 seconds"
+    fail "gateway did not answer on the published port within 480 seconds"
 }
 
 config() {
@@ -107,7 +109,8 @@ wait_ready
 echo "PASS: after a restart the config is unchanged and the paired browser reads its note"
 
 docker exec "$name" openclaw config set gateway.publicOrigin https://changed.example.com >/dev/null
-docker rm -f "$name" >/dev/null
+docker stop "$name" >/dev/null
+docker rm "$name" >/dev/null
 start https://ignored.example.com
 config | jq -e '.gateway.publicOrigin == "https://changed.example.com"' >/dev/null ||
     fail "a replaced container overwrote the existing config: $(config)"
