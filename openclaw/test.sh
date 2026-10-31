@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Runs the image the way the panel does, with fresh volumes and only environment
 # variables, and checks the first-start config, a trusted and an untrusted proxy,
-# a Control UI sign-in from another host, restarts, a replaced container, and the
-# refusals.
+# a Control UI sign-in from another host, restarts, a replaced container, a new
+# proxy list on a replaced container, and the refusals.
 #   openclaw/test.sh <image>
 set -euo pipefail
 
@@ -29,14 +29,22 @@ fail() {
     exit 1
 }
 
+# start <origin> [<proxy list>], with OPENCLAW_TRUSTED_PROXIES unset when no list is given.
 start() {
+    local env=(-e OPENCLAW_GATEWAY_TOKEN="$token" -e OPENCLAW_PUBLIC_ORIGIN="$1")
+    [ $# -lt 2 ] || env+=(-e OPENCLAW_TRUSTED_PROXIES="$2")
     docker run -d --name "$name" --restart unless-stopped -p 127.0.0.1::18789 \
         -v "$name-state:/home/node/.openclaw" \
         -v "$name-workspace:/home/node/.openclaw/workspace" \
         -v "$name-secrets:/home/node/.config/openclaw" \
-        -e OPENCLAW_GATEWAY_TOKEN="$token" -e OPENCLAW_PUBLIC_ORIGIN="$1" \
-        -e OPENCLAW_TRUSTED_PROXIES="$proxy" "$image" >/dev/null
+        "${env[@]}" "$image" >/dev/null
     wait_ready
+}
+
+# Stops the gateway cleanly so the next container gets its state lease at once.
+remove() {
+    docker stop "$name" >/dev/null
+    docker rm "$name" >/dev/null
 }
 
 # Waits through restarts too: a gateway killed without a clean stop holds its
@@ -46,7 +54,7 @@ wait_ready() {
         if [ "$(docker inspect -f '{{.State.Running}}' "$name")" = true ]; then
             port=$(docker port "$name" 18789/tcp | head -1 | sed 's/.*://')
             if curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
-                gateway=$(docker inspect -f '{{.NetworkSettings.IPAddress}}' "$name")
+                gateway=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$name")
                 echo "gateway ready after $(docker inspect -f '{{.RestartCount}}' "$name") restarts"
                 return 0
             fi
@@ -80,7 +88,7 @@ got=$(docker inspect -f '{{json .Config.Cmd}}' "$image")
 [ "$got" = "$want" ] || fail "CMD is $got, upstream's is $want"
 echo "PASS: the entrypoint hands over to upstream's entrypoint and command"
 
-start "$origin"
+start "$origin" "$proxy"
 config | jq -e --arg origin "$origin" --arg proxy "$proxy" \
     '.gateway.mode == "local" and .gateway.bind == "lan" and .gateway.publicOrigin == $origin
      and .gateway.trustedProxies == [$proxy]' >/dev/null ||
@@ -130,15 +138,41 @@ wait_ready
 echo "PASS: after a restart the config is unchanged and the paired browser reads its note"
 
 docker exec "$name" openclaw config set gateway.publicOrigin https://changed.example.com >/dev/null
-docker stop "$name" >/dev/null
-docker rm "$name" >/dev/null
-start https://ignored.example.com
+remove
+start https://ignored.example.com "$proxy"
 config | jq -e '.gateway.publicOrigin == "https://changed.example.com"' >/dev/null ||
     fail "a replaced container overwrote the existing config: $(config)"
 [ "$(read_note https://changed.example.com)" = "$note" ] || fail "USER.md after replacing the container"
 echo "PASS: a replaced container keeps the customer's config, the pairing and the note"
 
-docker rm -f "$name" >/dev/null
+remove
+start https://ignored.example.com "$proxy, 198.51.100.7"
+config | jq -e --arg proxy "$proxy" '.gateway.trustedProxies == [$proxy, "198.51.100.7"]
+     and .gateway.publicOrigin == "https://changed.example.com"' >/dev/null ||
+    fail "a replaced container with a new proxy list: $(config)"
+code=$(curl -s -o /dev/null -w '%{http_code}' "${forwarded[@]}" "http://127.0.0.1:$port/")
+[ "$code" = 200 ] || fail "the Control UI page through the trusted proxy returned $code after the new list"
+[ "$(read_note https://changed.example.com)" = "$note" ] || fail "USER.md after the new proxy list"
+echo "PASS: a replaced container with a new OPENCLAW_TRUSTED_PROXIES list writes it to the existing config and keeps the rest"
+
+remove
+start https://ignored.example.com
+config | jq -e --arg proxy "$proxy" '.gateway.trustedProxies == [$proxy, "198.51.100.7"]' >/dev/null ||
+    fail "a replaced container without OPENCLAW_TRUSTED_PROXIES changed the list: $(config)"
+echo "PASS: a replaced container without OPENCLAW_TRUSTED_PROXIES keeps the existing list"
+
+remove
+rc=0
+timeout 180 docker run --rm -v "$name-state:/home/node/.openclaw" -e OPENCLAW_GATEWAY_TOKEN="$token" \
+    -e OPENCLAW_TRUSTED_PROXIES=proxy.example.com "$image" >/dev/null 2>&1 || rc=$?
+if [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ]; then
+    fail "a malformed proxy list on an existing config ended with $rc"
+fi
+docker run --rm -v "$name-state:/v" --entrypoint cat "$image" /v/openclaw.json |
+    jq -e --arg proxy "$proxy" '.gateway.trustedProxies == [$proxy, "198.51.100.7"]' >/dev/null ||
+    fail "a malformed proxy list changed the existing config"
+echo "PASS: a malformed proxy list stops a start on an existing config and leaves the list alone"
+
 for bad in "OPENCLAW_PUBLIC_ORIGIN=" "OPENCLAW_PUBLIC_ORIGIN=http://203.0.113.10:18789" \
     "OPENCLAW_TRUSTED_PROXIES=proxy.example.com"; do
     docker volume rm -f "$name-fresh" >/dev/null
