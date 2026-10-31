@@ -29,6 +29,16 @@ const deviceId = crypto.createHash("sha256").update(publicKey).digest("hex");
 
 const print = (line) => console.log(JSON.stringify(line));
 
+// The Control UI sends the build id it was built with. The page it is served
+// from carries that id followed by a hash of its public assets.
+async function pageBuildId() {
+  const page = new URL(url);
+  page.protocol = page.protocol === "wss:" ? "https:" : "http:";
+  page.pathname = "/";
+  const html = await (await fetch(page)).text();
+  return html.match(/data-openclaw-control-ui-build-id="([^"]+)-[0-9a-f]{64}"/)?.[1];
+}
+
 function session() {
   const ws = new WebSocket(url, { headers: { Origin: origin } });
   const waiting = new Map();
@@ -62,6 +72,10 @@ function session() {
 }
 
 async function signIn() {
+  const buildId = await pageBuildId();
+  if (buildId) {
+    client.buildId = buildId;
+  }
   for (let attempt = 1; ; attempt++) {
     const s = session();
     const { nonce, ts } = await s.challenged;

@@ -7,10 +7,16 @@ FROM ghcr.io/openclaw/openclaw:2026.9.33@sha256:ced9bfaf2514f9ec6bb2172616149076
 # gateway.publicOrigin when that is set. A panel template can only pass
 # environment variables, so entrypoint.sh writes the same three settings on a
 # volume with no config yet, taking the origin from OPENCLAW_PUBLIC_ORIGIN. It
-# leaves an existing config alone and then runs upstream's entrypoint, which
-# runs doctor before the gateway. test.sh checks that ENTRYPOINT ends with the
-# base image's own ENTRYPOINT. The paths and port are the ones upstream's
-# docker-compose.yml pins.
+# leaves the rest of an existing config alone and then runs upstream's
+# entrypoint, which runs doctor before the gateway. test.sh checks that
+# ENTRYPOINT ends with the base image's own ENTRYPOINT. The paths and port are
+# the ones upstream's docker-compose.yml pins.
+# Behind a reverse proxy, such as the app-domain proxy, the gateway answers
+# forwarded requests with 403 unless gateway.trustedProxies lists the proxy.
+# The proxy addresses belong to the host, not to the app, so the entrypoint
+# writes OPENCLAW_TRUSTED_PROXIES there on every start when it is set. A
+# replaced container with a new list updates an existing config, and one
+# without the variable keeps the list it has.
 ENV OPENCLAW_STATE_DIR=/home/node/.openclaw \
     OPENCLAW_CONFIG_PATH=/home/node/.openclaw/openclaw.json \
     OPENCLAW_WORKSPACE_DIR=/home/node/.openclaw/workspace \
